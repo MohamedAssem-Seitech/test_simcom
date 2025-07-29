@@ -1,1 +1,699 @@
-test_test
+/*
+ * Gsm_program.c
+ *
+ *  Created on: May 19, 2025
+ *      Author: AbdElatyAhmedAbdElat
+ */
+
+#include "StdLib_interface.h"
+#include "usart.h"
+#include "SerialMgr_interface.h"
+#include "Gsm_interface.h" // GSM interface header for function prototypes
+#include "Gsm_Cfg.h"	   // GSM configuration header for constants/macros
+/*********************************************************************************/
+/**                                 Program macros                              **/
+/*********************************************************************************/
+
+#define RNG_GSM_START_INDEX (0)
+#define PUBLISH_SEQUENCE_SIZE (5)
+
+#define NO_OPERATION (0)
+#define OPERATION_STARTED (1)
+#define OPERATION_FINSHED (2)
+
+/*********************************************************************************/
+/**                                Global variables                             **/
+/*********************************************************************************/
+
+typedef enum
+{
+	GSM_IDLE = 0, // Module is idle, ready for next operation
+	GSM_INIT,
+	GSM_OPERATION_DONE, // Operation completed successfully
+	GSM_SENDING,
+	GSM_RECEIVING, // Data send operation failed
+	GSM_ERROR
+} GsmStateMachine_t;
+
+// AT command structure
+typedef struct
+{
+	uint8_t *command;
+	uint8_t *expected_response;
+	uint16_t timeout_ms;
+	boolean critical;
+} atCommand_t;
+
+#define INIT 1
+GsmStatus_t gsm_status = GSM_STATE_INIT;		// Holds the current GSM status
+GsmStateMachine_t gsm_state_machine = GSM_IDLE; // Holds the current GSM state machine status
+atCommand_t *px_sendAt_cmd = NULL_PTR;			// Pointer to the current AT command being processed
+atCommand_t *px_currentAt_sec = NULL_PTR;		// Pointer to the current AT command being processed
+
+uint8_t SequenceSize = ZERO_COUNT;
+uint8_t gu8_InitStatus = GSM_INIT_FAILED;
+uint8_t gu8_CurrentProcess = ZERO_COUNT;
+static uint8_t gArr_GSM_rxBuffer[GSM_RX_BUFFER_SIZE];
+uint8_t gu8_operationStatus = OPERATION_STARTED;
+static serialMgr_dataControlBlock_t gStr_GSMSerial_CB =
+	{
+		GSM_SERIAL_CHANNEL,
+		gArr_GSM_rxBuffer,
+		GSM_RX_BUFFER_SIZE,
+		RNG_GSM_START_INDEX};
+
+// GSM Network Init
+atCommand_t xAtCmd_InitArr[SIZE_OF_INIT_ARRAY] = {
+	{(uint8_t *)"AT\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"ATE0\r\n", (uint8_t *)"OK", 1000, BOOLEAN_FALSE},
+	{(uint8_t *)"AT+CPIN?\r\n", (uint8_t *)"READY", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CSQ\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CREG?\r\n", (uint8_t *)"+CREG: 0,1", 2000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CGATT=1\r\n", (uint8_t *)"OK", 3000, BOOLEAN_FALSE},
+	{(uint8_t *)"AT+CGDCONT=1,\"IP\",\"internet.v\"\r\n", (uint8_t *)"OK", 3000, BOOLEAN_FALSE},
+	{(uint8_t *)"AT+CGACT=1,1\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CGPADDR=1\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE}};
+
+// MQTT Plain Init
+atCommand_t xAtCmd_ConnectMqtt[] = {
+	{(uint8_t *)"AT+CMQTTACCQ=0,\"nz9iibhatqdglp\"\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CMQTTCONNECT=0,\"tcp://connect.dev.kuido.io:1883\",60,1,\"23iglm146q85fx\",\"lcn3all80mszwo\"\r\n", (uint8_t *)"OK", 5000, BOOLEAN_TRUE}};
+atCommand_t xAtCmd_MqttStart[] = {
+	{(uint8_t *)"AT+CMQTTSTART\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE}};
+atCommand_t xAtCmd_MqttStop[] = {
+	{(uint8_t *)"AT+CMQTTSTOP\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE}};
+atCommand_t xAtCmd_DisconnectMqtt[] = {
+	// Gracefully disconnect from the MQTT broker
+	{(uint8_t *)"AT+CMQTTDISC=0,60\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE},
+
+	// Release the MQTT client (optional but recommended)
+	{(uint8_t *)"AT+CMQTTREL=0\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CMQTTSTOP\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE}};
+
+// MQTT TLS Init
+atCommand_t mqtt_ssl_sequence[] = {
+	{(uint8_t *)"AT+CMQTTSTART\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CMQTTACCQ=0,\"secure_client\"\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CMQTTCONNECT=0,\"tcp://connect.dev.kuido.io:1883\",60,1,\"23iglm146q85fx\",\"lcn3all80mszwo\"\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CMQTTPUBTOPIC=0,32\r\n", (uint8_t *)">", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"/device/nz9iibhatqdglp/location", (uint8_t *)"N", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CMQTTPAYLOAD=0,27\r\n", (uint8_t *)">", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"{\"lat\":30,\"long\":31}", (uint8_t *)"N", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+CMQTTPUB=0,1,60\r\n", (uint8_t *)"OK", 2000, BOOLEAN_TRUE}};
+
+// Global Variable HTTPS Data Length
+uint32_t gu32_httpRead_length = 0;
+
+// HTTPS Plain Init and Configuration
+atCommand_t xAtCmd_HttpsInit[] = {
+    {(uint8_t *)"AT+HTTPINIT\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+HTTPPARA=\"URL\",\"https://github.com/MohamedAssem-Seitech/test_simcom/blob/main/test_simcom.txt\"\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+HTTPHEAD\r\n", (uint8_t *)"OK:", 1000, BOOLEAN_TRUE},
+	{(uint8_t *)"AT+HTTPREAD=0,500\r\n", (uint8_t *)"OK:", 1000, BOOLEAN_TRUE},
+};
+
+// HTTPS File Download Request Sequence
+atCommand_t xAtCmd_HttpsDownload[] = {
+    {(uint8_t *)"AT+HTTPPARA=\"URL\",\"https://httpbin.org/json\"\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+    // {(uint8_t *)"AT+HTTPPARA=\"USERDATA\",\"USER_Test\"\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+    // {(uint8_t *)"AT+HTTPPARA=\"TIMEOUT\",30\r\n", (uint8_t *)"OK", 1000, BOOLEAN_TRUE},
+    {(uint8_t *)"AT+HTTPACTION=0\r\n", (uint8_t *)"+HTTPACTION: 0,200", 30000, BOOLEAN_TRUE}
+};
+
+// HTTPS Read Downloaded Data
+atCommand_t xAtCmd_HttpsReadData[] = {
+    {(uint8_t *)"AT+HTTPREAD\r\n", (uint8_t *)"+HTTPREAD:", 5000, BOOLEAN_TRUE}
+};
+
+// HTTPS Cleanup Commands
+atCommand_t xAtCmd_HttpsCleanup[] = {
+    {(uint8_t *)"AT+HTTPTERM\r\n", (uint8_t *)"OK", 3000, BOOLEAN_TRUE}
+};
+
+Std_ErrorStatus_t GSM_HttpsInit(uint32_t *pu32_readFile_length)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		*pu32_readFile_length = gu32_httpRead_length;
+		px_sendAt_cmd = &xAtCmd_HttpsInit[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = 4;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+Std_ErrorStatus_t GSM_HttpsDownload(uint8_t *pu8_url)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		// Prepare the HTTPS connection command
+		uint8_t Https_connect_cmd[256];
+		Std_sprintf(Https_connect_cmd, (uint8_t *)"AT+HTTPPARA=\"URL\",\"%s\"\r\n", (void *)pu8_url);
+		Std_MemMove((uint8_t *)xAtCmd_HttpsDownload[0].command, Https_connect_cmd, Std_StrLen(Https_connect_cmd));
+		px_sendAt_cmd = &xAtCmd_HttpsDownload[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = TWO_COUNT;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+
+Std_ErrorStatus_t GSM_HttpsRead_Request(void)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		px_sendAt_cmd = &xAtCmd_HttpsReadData[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = ONE_COUNT;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+		gu32_httpRead_length = 0;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+
+Std_ErrorStatus_t GSM_HttpsRead_File(uint32_t *pu32_FileLength)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		px_sendAt_cmd = &xAtCmd_HttpsReadData[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = ONE_COUNT;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+		gu32_httpRead_length = 0;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+
+Std_ErrorStatus_t GSM_HttpsCleanup(void)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		px_sendAt_cmd = &xAtCmd_HttpsCleanup[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = ONE_COUNT;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+
+Std_ErrorStatus_t GSM_MqttConnect(GsmMqttConfig_t *RequestedConfig)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	/* Validate the input arguments */
+	if (RequestedConfig->hostname == NULL_PTR || RequestedConfig->port == 0 ||
+		RequestedConfig->username == NULL_PTR || RequestedConfig->password == NULL_PTR)
+	{
+		/* Invalid input error */
+		e_returnValue = STD_ERROR_INVALID_INPUT;
+	}
+	else
+	{
+		void *args[] = {
+			ARG_STR(RequestedConfig->clientId), ARG_TYPE_STRING,
+			ARG_STR(RequestedConfig->hostname), ARG_TYPE_STRING,
+			ARG_STR(RequestedConfig->port), ARG_TYPE_STRING,
+			ARG_STR(RequestedConfig->username), ARG_TYPE_STRING,
+			ARG_STR(RequestedConfig->password), ARG_TYPE_STRING};
+		// Check if the GSM module is available
+		if (gsm_status == GSM_AVAILABLE)
+		{
+			// Prepare the MQTT connection command
+			uint8_t mqtt_connect_cmd[256];
+
+			// Std_sprintf(mqtt_connect_cmd, (uint8_t *)"AT+CMQTTACCQ=0,\"%s\"\r\n", args);
+			// Std_MemMove((uint8_t *)xAtCmd_ConnectMqtt[1].command, mqtt_connect_cmd, Std_StrLen(mqtt_connect_cmd));
+			// Prepare the MQTT connect command with the provided configuration
+			// sprintf is used to format the command string with the provided parameters
+			Std_sprintf(mqtt_connect_cmd, (uint8_t *)"AT+CMQTTCONNECT=0,\"tcp://%s:%s\",60,1,\"%s\",\"%s\"\r\n", &args[1]);
+
+			// Set the command and expected response
+			Std_MemMove((uint8_t *)xAtCmd_ConnectMqtt[1].command, mqtt_connect_cmd,
+						Std_StrLen(mqtt_connect_cmd));
+
+			px_sendAt_cmd = &xAtCmd_ConnectMqtt[ZERO_COUNT];
+			px_currentAt_sec = px_sendAt_cmd;
+			SequenceSize = SIZE_OF_MQTT_CONNECT_SEQUENCE;
+			gu8_operationStatus = OPERATION_STARTED;
+			gsm_state_machine = GSM_SENDING;
+		}
+		else
+		{
+			e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+		}
+	}
+	return e_returnValue;
+}
+Std_ErrorStatus_t GSM_MqttStart(void)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		px_sendAt_cmd = &xAtCmd_MqttStart[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = ONE_COUNT;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+Std_ErrorStatus_t GSM_MqttStop(void)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		px_sendAt_cmd = &xAtCmd_DisconnectMqtt[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = ONE_COUNT;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+Std_ErrorStatus_t GSM_MqttDisConnect(void)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	if (gsm_status == GSM_AVAILABLE)
+	{
+		px_sendAt_cmd = &xAtCmd_DisconnectMqtt[ZERO_COUNT];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = SIZE_OF_MQTT_DISCONNECT_SEQUENCE;
+		gu8_operationStatus = OPERATION_STARTED;
+		gsm_state_machine = GSM_SENDING;
+	}
+	else
+	{
+		e_returnValue = STD_ERROR_BUSY; // GSM module is busy
+	}
+	return e_returnValue;
+}
+void Format_GPS_JSON(uint8_t *buffer, uint8_t buffer_len, const GPS_Data_t *gps)
+{
+
+	floatInstring(buffer, (uint8_t *)"{\"lat\":%f,\"long\":%f}", gps->latitude, gps->longitude);
+
+	return;
+}
+Std_ErrorStatus_t GSM_SendATcmd(uint8_t *command)
+{
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	/* Validate the input arguments */
+	if (command == NULL_PTR)
+	{
+		/* Invalid input error */
+		e_returnValue = STD_ERROR_INVALID_INPUT;
+	}
+	else
+	{
+		uint8_t au8_length = Std_StrLen(command);
+		/* Write serial data on bluetooth channel */
+		e_returnValue = SerialMgr_writeData(&gStr_GSMSerial_CB, (uint8_t *)command, au8_length);
+	}
+
+	/*Return the error code*/
+	return e_returnValue;
+}
+Std_ErrorStatus_t GSM_ReceiveATcmd(const uint8_t *Receivedcommand)
+{
+
+	/* Local variable used to return error code  */
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	uint16_t gu16_DataSize = 0;
+	/* Validate the input arguments */
+	if (Receivedcommand == NULL_PTR)
+	{
+		/* Invalid input error */
+		e_returnValue = STD_ERROR_INVALID_INPUT;
+	}
+	else
+	{
+		e_returnValue = SerialMgr_readData(&gStr_GSMSerial_CB, &gu16_DataSize);
+	}
+
+	/*Return the error code*/
+	return e_returnValue;
+}
+Std_ErrorStatus_t GSM_MqttPublish(uint8_t *topic, uint8_t *payload)
+{
+	Std_ErrorStatus_t e_returnValue = STD_ERROR_OK;
+	static uint8_t cmd_buf_topic[64];
+	static uint8_t cmd_buf_payload[64];
+	static uint8_t cmd_buf_pub[32];
+	// Static array to hold the sequence of AT commands for publishing
+	static atCommand_t publishSequence[5];
+	void *args[2];
+	uint16_t u16_SizeOf;
+	if (topic == NULL_PTR || payload == NULL_PTR)
+	{
+		e_returnValue = STD_ERROR_INVALID_INPUT;
+	}
+	else
+	{
+		if (gsm_status != GSM_AVAILABLE)
+		{
+			e_returnValue = STD_ERROR_BUSY;
+		}
+		else
+		{
+			u16_SizeOf = Std_StrLen(topic);
+			args[0] = ARG_UINT(u16_SizeOf);
+			args[1] = ARG_TYPE_UINT16;
+			Std_sprintf(cmd_buf_topic, (uint8_t *)"AT+CMQTTTOPIC=0,%d\r\n", args);
+			publishSequence[0].command = cmd_buf_topic;
+			publishSequence[0].expected_response = (uint8_t *)">";
+			publishSequence[0].timeout_ms = 1000;
+			publishSequence[0].critical = BOOLEAN_TRUE;
+
+			// Step 2: Send topic string after prompt
+			publishSequence[1].command = (uint8_t *)topic;
+			publishSequence[1].expected_response = (uint8_t *)"N"; // Or next prompt
+			publishSequence[1].timeout_ms = 1000;
+			publishSequence[1].critical = BOOLEAN_TRUE;
+
+			// Step 3: Send AT+CMQTTPAYLOAD=0,<len>
+			u16_SizeOf = Std_StrLen(payload);
+			args[0] = ARG_UINT(u16_SizeOf);
+			args[1] = ARG_TYPE_UINT16;
+
+			Std_sprintf(cmd_buf_payload, (uint8_t *)"AT+CMQTTPAYLOAD=0,%d\r\n", args);
+			publishSequence[2].command = cmd_buf_payload;
+			publishSequence[2].expected_response = (uint8_t *)">";
+			publishSequence[2].timeout_ms = 1000;
+			publishSequence[2].critical = BOOLEAN_TRUE;
+
+			// Step 4: Send payload string after prompt
+			publishSequence[3].command = (uint8_t *)payload;
+			publishSequence[3].expected_response = (uint8_t *)"N"; // Or next prompt
+			publishSequence[3].timeout_ms = 1000;
+			publishSequence[3].critical = BOOLEAN_TRUE;
+
+			// Step 5: Send AT+CMQTTPUB=0,1,60
+			Std_MemCopy((uint8_t *)"AT+CMQTTPUB=0,1,60\r\n", cmd_buf_pub, 24);
+			publishSequence[4].command = cmd_buf_pub;
+			publishSequence[4].expected_response = (uint8_t *)"OK";
+			publishSequence[4].timeout_ms = 2000;
+			publishSequence[4].critical = BOOLEAN_TRUE;
+
+			px_sendAt_cmd = publishSequence;
+			px_currentAt_sec = px_sendAt_cmd;
+			SequenceSize = PUBLISH_SEQUENCE_SIZE;
+			gu8_operationStatus = OPERATION_STARTED;
+			gsm_state_machine = GSM_SENDING;
+		}
+	}
+	return e_returnValue;
+}
+
+// === User Functions ===
+/*
+ * Gsm_Init
+ * Initializes the GSM module, network, and MQTT connection.
+ */
+void Gsm_Init(void)
+{
+
+	/* Initialize the GSM serial manager */
+	SerialMgr_init(&gStr_GSMSerial_CB);
+	/* Initialize the GSM status and state machine */
+	gsm_state_machine = GSM_INIT;
+	gu8_CurrentProcess = INIT;
+	return;
+}
+
+/*
+ * GsmMgr_Runnable
+ * Periodic task to send GPS data to MQTT broker.
+ * Sends data every 100 ms.
+ */
+void GsmMgr_Runnable(void)
+{
+	static Std_ErrorStatus_t status = STD_ERROR_OK;
+	static uint16_t counter = 0;
+	static uint8_t SequenceIndex = 0;
+	static uint8_t waittimetoAvailable = 3;
+	static uint8_t au8_ErrorTrials = 0;
+	switch (gsm_state_machine) // Switch statement to handle different cases
+	{
+	case GSM_INIT:
+		px_sendAt_cmd = &xAtCmd_InitArr[0];
+		px_currentAt_sec = px_sendAt_cmd;
+		SequenceSize = SIZE_OF_INIT_ARRAY;
+		gsm_state_machine = GSM_SENDING;
+		break;
+	case GSM_SENDING:
+		status = GSM_SendATcmd(px_sendAt_cmd->command);
+		if (status == STD_ERROR_OK)
+		{
+			gsm_state_machine = GSM_RECEIVING; // Update status to receiving
+			gsm_status = GSM_PROCESSING;	   // Update GSM status to processing
+		}
+		else if (status == STD_ERROR_BUSY)
+		{
+			gsm_state_machine = GSM_SENDING; // Update status to processing
+		}
+		else
+		{
+			gsm_state_machine = GSM_ERROR; // Update status to idle
+			gsm_status = GSM_SEND_FAILED;  // Update GSM status to send failed
+		}
+		break;
+	case GSM_RECEIVING:
+		if (Std_MemCmp(px_sendAt_cmd->expected_response, (uint8_t *)"N", 1) == 0)
+		{
+			SequenceIndex++;
+			px_sendAt_cmd++;				 // Move to the next command in the sequence
+			gsm_state_machine = GSM_SENDING; // Update status to sending
+			gsm_status = GSM_PROCESSING;	 // Update GSM status to processing
+			counter = 0;
+		}
+		else
+		{
+			if (counter < ((px_sendAt_cmd->timeout_ms) / RUNNABLE_PERIODICITY))
+			{
+				counter++; // Increment the counter for timeout check
+				status = GSM_ReceiveATcmd(px_sendAt_cmd->command);
+				if (status != STD_ERROR_BUFFER_EMPTY)
+				{
+					// Check if the received response contains the expected response
+					if ((my_strstr((uint8_t *)gArr_GSM_rxBuffer, (uint8_t *)"ERROR") == NULL_PTR))
+					{
+						// Check for HTTPREAD response and extract length
+						if ((my_strstr((uint8_t *)gArr_GSM_rxBuffer, (uint8_t *)"+HTTPREAD:") != NULL_PTR))
+						{
+							uint8_t *httpread_pos = my_strstr((uint8_t *)gArr_GSM_rxBuffer, (uint8_t *)"+HTTPREAD:");
+							httpread_pos += 10; // Move past "+HTTPREAD:"
+							// Skip any spaces
+							while (*httpread_pos == ' ') {
+								httpread_pos++;
+							}
+							gu32_httpRead_length = 0;
+							while (*httpread_pos >= '0' && *httpread_pos <= '9') {
+								gu32_httpRead_length = gu32_httpRead_length * 10 + (*httpread_pos - '0');
+								httpread_pos++;
+							}
+						}
+						if ((my_strstr((uint8_t *)gArr_GSM_rxBuffer, (uint8_t *)px_sendAt_cmd->expected_response) != NULL_PTR))
+						{
+							SequenceIndex++;
+							if (SequenceIndex < SequenceSize)
+							{
+								px_sendAt_cmd++;				 // Move to the next command in the sequence
+								gsm_state_machine = GSM_SENDING; // Update status to sending
+								gsm_status = GSM_PROCESSING;	 // Update GSM status to processing
+								counter = 0;
+							}
+							else
+							{
+								gsm_state_machine = GSM_OPERATION_DONE; // Update status to operation done
+							}
+						}
+						else
+						{
+						}
+					}
+					else
+					{
+						gsm_state_machine = GSM_ERROR;	  // Update status to idle
+						gsm_status = GSM_REICEIVE_FAILED; // Update GSM status to send failed
+					}
+					SerialMgr_BufferFlush(&gStr_GSMSerial_CB); // Flush the serial buffer
+				}
+				else if (status == STD_ERROR_BUSY)
+				{
+					gsm_state_machine = GSM_RECEIVING; // Update status to receiving
+				}
+				else
+				{
+				}
+			}
+			else
+			{
+				gsm_state_machine = GSM_ERROR;			   // Update status to idle
+				gsm_status = GSM_REICEIVE_FAILED;		   // Update GSM status to send failed
+				SerialMgr_BufferFlush(&gStr_GSMSerial_CB); // Flush the serial buffer
+			}
+
+		} // End of else for receiving
+		break;
+
+	case GSM_IDLE:
+		if (gsm_status != GSM_INIT_FAILED)
+		{
+			if (gsm_status != GSM_SEQUENCE_DONE)
+			{
+
+				// If the GSM module is idle, do nothing or handle any other tasks
+				if (waittimetoAvailable > 0)
+				{
+					waittimetoAvailable--; // Decrement the wait time to available
+				}
+				else
+				{
+					waittimetoAvailable = 3;	// Reset wait time to available
+					gsm_status = GSM_AVAILABLE; // Update GSM status to available
+				}
+			}
+			else
+			{
+				gsm_status = GSM_AVAILABLE; // Update GSM status to available
+			}
+		}
+		else
+		{
+		}
+		break;
+	case GSM_OPERATION_DONE:
+		if (gu8_CurrentProcess == INIT)
+		{
+			gu8_CurrentProcess = ZERO_COUNT;
+			gsm_state_machine = GSM_IDLE;
+		}
+		else
+		{
+			if (gu8_operationStatus == OPERATION_FINSHED)
+			{
+				gu8_operationStatus = NO_OPERATION;
+				gsm_state_machine = GSM_IDLE;
+			}
+			else
+			{
+			}
+		}
+		// If the operation is done, update the GSM status
+		gsm_status = GSM_SEQUENCE_DONE; // Update GSM status to operation done
+		// Reset the state machine for the next operation
+		px_sendAt_cmd = NULL_PTR; // Reset the command pointer
+		SequenceIndex = 0;		  // Reset SequenceIndex for next sequence
+		counter = 0;			  // Reset counter
+		au8_ErrorTrials = 0;
+
+		break;
+	case GSM_ERROR:
+		if (au8_ErrorTrials < NUM_OF_ERROR_SEQUENCE_TRIALS)
+		{
+			au8_ErrorTrials++;
+			if (gu8_CurrentProcess == INIT)
+			{
+				gsm_state_machine = GSM_INIT;
+			}
+			else
+			{
+				px_sendAt_cmd = px_currentAt_sec;
+				gsm_state_machine = GSM_SENDING;
+			}
+			SequenceIndex = 0;
+			counter = 0; // Reset counter
+		}
+		else
+		{
+			gsm_state_machine = GSM_IDLE;
+			px_sendAt_cmd = NULL_PTR; // Reset the command pointer
+			SequenceIndex = 0;		  // Reset SequenceIndex for next sequence
+			counter = 0;			  // Reset counter
+			au8_ErrorTrials = 0;
+			if (gu8_CurrentProcess == INIT)
+			{
+				gsm_status = GSM_INIT_FAILED;
+			}
+			else
+			{
+			}
+		}
+
+		break;
+
+	default:
+		break;
+	}
+}
+/*
+ * Gsm_CheckStatus
+ * Checks and updates the GSM status.
+ * Parameters:
+ *   pu8_status - Pointer to variable to store current status
+ */
+void Gsm_CheckStatus(GsmStatus_t *pu8_status)
+{
+	// Update the status variable with the current GSM status
+	*pu8_status = gsm_status;
+	return;
+}
+/*
+ * Gsm_CheckStatus
+ * Checks and updates the GSM status.
+ * Parameters:
+ *   pu8_status - Pointer to variable to store current status
+ */
+void Gsm_NotifyOperationFinished(void)
+{
+	// Update the operation status variable
+	gu8_operationStatus = OPERATION_FINSHED;
+	return;
+}
