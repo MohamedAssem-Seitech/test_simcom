@@ -2,30 +2,30 @@
 
 Requires Python 3.10+ and Git installed and available on PATH.
 
-## Windows setup (PowerShell or Command Prompt)
+## Windows setup (Git Bash)
 
 Run from your repository root:
 
-```powershell
-py -3 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe version_history.py --file-path config/tests.yml --old-version 2.1.2 --new-version 2.1.3
+```bash
+python -m venv .venv
+source .venv/Scripts/activate
+python -m pip install -r requirements.txt
+python version_history.py --file-path config/tests.yml --old-version 2.1.2 --new-version 2.1.3
 ```
 
 For this repository's `test.yml`:
 
-```powershell
-.venv\Scripts\python.exe version_history.py --file-path test.yml --old-version 2.1.2 --new-version 2.1.3
+```bash
+python version_history.py --file-path test.yml --old-version 2.0.1 --new-version 2.1.3
 ```
 
 An absolute path with spaces also works:
 
-```powershell
-.venv\Scripts\python.exe version_history.py --file-path "C:\Projects\My Repo\config\tests.yml" --old-version 2.1.2 --new-version 2.1.3
+```bash
+python version_history.py --file-path "C:/Projects/My Repo/config/tests.yml" --old-version 2.1.2 --new-version 2.1.3
 ```
 
-No virtual environment activation is needed. If `py` is unavailable, use your
-installed Python 3.10+ executable instead.
+Run `source .venv/Scripts/activate` again when opening a new Git Bash session.
 
 The command overwrites `version_changes_report.xlsx` in the current working
 directory. Close that file in Excel before running the command again.
@@ -41,9 +41,17 @@ truncated with a warning; unsupported control characters are removed.
   build suffixes. Comparisons use exact strings.
 - All history reachable from local branches, tags, remote-tracking refs and
   HEAD is scanned. No fetch is performed; shallow clones have limited history.
-- Every commit is compared with its actual parents, not its neighbor in a
-  date-sorted log. Merges match if any parent has the requested old version,
-  and appear once. Changed files are the union of diffs against all parents.
+- Each commit introducing the new version is compared with its nearest
+  old-version ancestor by number of parent edges. Intermediate versions are
+  allowed, so `2.0.1 -> 2.1.1 -> 2.1.2 -> 2.1.3` matches a search for
+  `2.0.1` to `2.1.3`. Commits inheriting the new version from any parent
+  are skipped. Unrelated branches are never used as comparison baselines.
+- `Requires Changes` shows added/removed entries between the two endpoint
+  snapshots. `Old Version Commit` identifies the baseline. Equally near old
+  ancestors are all included and labeled in the same row for merge histories.
+- Commit metadata describes the commit introducing the new version.
+  `Files Changed` still lists that commit's changes against its parents,
+  rather than all changes across the version range.
 - Root commits and file additions have no previous version and do not match.
 - The supplied path is fixed across history; renames are not followed.
   Files deleted from the working tree can still be searched in history.

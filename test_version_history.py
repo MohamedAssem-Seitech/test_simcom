@@ -13,6 +13,43 @@ from version_history import COLUMNS, find_changes, version_at, write_report
 class HistoryTests(unittest.TestCase):
     """Exercise real Git snapshots and the generated Excel report."""
 
+    def test_intermediate_versions(self) -> None:
+        """Compare endpoints across intermediate versions on actual ancestry."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with Repo.init(root) as repo:
+                actor = Actor("Test", "test@example.com")
+                commits = []
+                for version, dependency in (
+                    ("2.0.1", "Library/1"),
+                    ("2.1.1", "Library/2"),
+                    ("2.1.2", "Library/3"),
+                    ("2.1.3", "Library/4"),
+                    ("2.1.3", "Library/4"),
+                ):
+                    (root / "tests.yml").write_text(
+                        f"version: {version}\nrequires:\n- {dependency}\n",
+                        encoding="utf-8",
+                    )
+                    repo.index.add(["tests.yml"])
+                    commits.append(repo.index.commit(
+                        version, author=actor, committer=actor,
+                    ))
+                rows = find_changes(repo, "tests.yml", "2.0.1", "2.1.3")
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["Commit Hash"], commits[3].hexsha)
+                self.assertEqual(
+                    rows[0]["Old Version Commit"], commits[0].hexsha,
+                )
+                self.assertEqual(
+                    rows[0]["Requires Changes"],
+                    "Removed: Library/1\nAdded: Library/4",
+                )
+                # A version on a descendant cannot serve as an old ancestor.
+                self.assertEqual(
+                    find_changes(repo, "tests.yml", "2.1.3", "2.0.1"), [],
+                )
+
     def test_history_and_workbooks(self) -> None:
         """Find transitions on branches and retain safe cells and headers."""
         with tempfile.TemporaryDirectory() as directory:

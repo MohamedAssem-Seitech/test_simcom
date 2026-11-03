@@ -1,10 +1,10 @@
-"""Find exact YAML version transitions in Git history and export to Excel.
+"""Compare YAML versions across Git history and export to Excel.
 
 Requires Python 3.10+, Git, and the packages in requirements.txt.
 Relative file paths are resolved against the current working directory.
 All commits reachable from local refs (including remote-tracking refs) and
-HEAD are scanned. A merge matches if any parent has the requested old version;
-each matching commit is reported once. Root commits have no previous version.
+HEAD are scanned. Compare commits introducing the new version with their
+nearest old-version ancestors, allowing intermediate versions.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ COLUMNS = [
     "Commit Hash", "Author Name", "Author Email", "Commit Date",
     "Commit Message", "Old Version", "New Version", "Files Changed",
     "Requires Changes",
+    "Old Version Commit",
 ]
 
 
@@ -142,10 +143,36 @@ def requires_changes(parent: Commit, commit: Commit, file_path: str) -> str:
     return "\n".join(changes) or "No changes"
 
 
+def nearest_old_commits(
+    commit: Commit, versions: dict[str, str | None], old_version: str,
+) -> list[Commit]:
+    """Find old-version ancestors at the smallest parent-edge distance.
+
+    Breadth-first traversal follows actual ancestry, never unrelated branches.
+    Equally close ancestors are retained so merge comparisons are explicit.
+    """
+    frontier = list(commit.parents)
+    seen = {commit.hexsha}
+    while frontier:
+        level = []
+        for ancestor in frontier:
+            if ancestor.hexsha not in seen:
+                seen.add(ancestor.hexsha)
+                level.append(ancestor)
+        matches = [
+            ancestor for ancestor in level
+            if versions.get(ancestor.hexsha) == old_version
+        ]
+        if matches:
+            return matches
+        frontier = [parent for ancestor in level for parent in ancestor.parents]
+    return []
+
+
 def find_changes(
     repo: Repo, file_path: str, old_version: str, new_version: str,
 ) -> list[dict[str, Any]]:
-    """Compare parent-child snapshots across all locally available history."""
+    """Compare new-version introductions with nearest old-version ancestors."""
     if repo.git.rev_parse("--is-shallow-repository").strip() == "true":
         print("Warning: shallow clone; only available history is scanned.",
               file=sys.stderr)
@@ -168,16 +195,17 @@ def find_changes(
     for commit in commits:
         if versions[commit.hexsha] != new_version:
             continue
-        matching_parents = [
-            p for p in commit.parents if versions.get(p.hexsha) == old_version
-        ]
-        if not matching_parents:
+        # Do not repeat a version already present in a parent snapshot.
+        if any(versions.get(p.hexsha) == new_version for p in commit.parents):
+            continue
+        baselines = nearest_old_commits(commit, versions, old_version)
+        if not baselines:
             continue
         requires_diffs = []
-        for parent in matching_parents:
-            difference = requires_changes(parent, commit, file_path)
-            if len(matching_parents) > 1:
-                difference = f"Parent {parent.hexsha}:\n{difference}"
+        for baseline in baselines:
+            difference = requires_changes(baseline, commit, file_path)
+            if len(baselines) > 1:
+                difference = f"Old commit {baseline.hexsha}:\n{difference}"
             requires_diffs.append(difference)
         matches.append({
             "Commit Hash": commit.hexsha,
@@ -189,6 +217,7 @@ def find_changes(
             "New Version": new_version,
             "Files Changed": changed_files(commit),
             "Requires Changes": "\n\n".join(requires_diffs),
+            "Old Version Commit": "\n".join(c.hexsha for c in baselines),
         })
     return matches
 
@@ -220,7 +249,7 @@ def write_report(rows: list[dict[str, Any]], output: Path) -> None:
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
         for column, width in zip(
-            "ABCDEFGHI", (44, 24, 32, 28, 70, 20, 20, 60, 90),
+            "ABCDEFGHIJ", (44, 24, 32, 28, 70, 20, 20, 60, 90, 44),
         ):
             sheet.column_dimensions[column].width = width
 
