@@ -1,6 +1,41 @@
-name: pdc_info_fwa1
-version: 2.1.3
+name: "L060_HWA"
+version: "1.0.1"
 requires:
-- GLOBAL_L060G5/5.2.1@jenkins/1061
-- SharedElements/2.2.2@jenkins/swp
-- CanCatalog/6.0.0@jenkins/l060_fd14
+    # MBD Libraries
+  - "GLOBAL_STD/1.12.0@jenkins/swp"
+  - "GLOBAL_PRJ/1.5.0@littlejenkins/l060"
+  - "GLOBAL_L060G5/5.1.0@jenkins/l060"
+  - "TargetLink/22.0.0-beta.1@jenkins/tools"
+  - "SharedElements/2.2.2@jenkins/swp"
+  - "JTEKT_AUTOSAR_Platform/1.26.0@littlejenkins/swp"
+  - "JOSS_Interfaces/1.6.0@baudiny/swp"
+  - "JOSS_L060/7.2.1@littlejenkins/l060"
+  - "CanCatalog/5.0.1@jenkins/l060_fd14"
+  - "CanCatalog_PrivateComm/4.2.0@baudiny/l060"
+  - "GLOBAL_LIB_144P/1.1.0@jenkins/l062"
+  - "dcm_swc/6.3.0@jenkins/l060"
+  - "bswm_swc/0.2.1@baudiny/l060"
+  - "ComM_swc/1.0.0@littlejenkins/l060"  
+  
+  # Compo Alignment
+  - "asm/4.1.1@jenkins/l060"
+  - "alt/1.1.0@jenkins/l060"
+  - "ast/1.1.1@jenkins/l060"
+  # Compo AngleSensor
+  - "cac_hwa/4.0.0@jenkins/l060" 
+  - "cas/7.0.1@jenkins/l060"
+  - "das/4.0.0@jenkins/l060"
+  # Compo Angle
+  - "mtr/9.1.0@jenkins/l060"
+  - "sac/1.1.0@jenkins/l060"
+  - "mac/5.0.1@jenkins/l060"
+  - "sam_hwa/5.0.1@jenkins/l060"
+  - "vsd_hwa_l060/4.0.0@jenkins/l060"
+  - "help/2.0.0@jenkins/l060"
+  #Compo AngleTargetGeneration
+  - "vgri/1.0.2@jenkins/l060"
+  - "selt_hwa/1.0.0@jenkins/l060"
+  - "evgr/5.1.0@jenkins/l060"
+  - "yod/2.0.2@jenkins/l060"
+  - "tag/3.1.1@jenkins/l060"
+  - "psm/2.0.1@jenkins/l060"
