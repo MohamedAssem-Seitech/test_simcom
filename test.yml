@@ -1,5 +1,5 @@
 name: "L060_HWA"
-version: "1.0.2"
+version: "1.1.0"
 requires:
     # MBD Libraries
   - "GLOBAL_STD/1.12.0@jenkins/swp"
@@ -18,17 +18,17 @@ requires:
   - "ComM_swc/1.0.0@littlejenkins/l060"  
   
   # Compo Alignment
-  - "asm/4.1.1@jenkins/l060"
-  - "alt/1.1.0@jenkins/l060"
-  - "ast/1.1.1@jenkins/l060"
+  - "asm/4.1.2@jenkins/l060"
+  - "alt/1.1.1@jenkins/l060"
+  - "ast/1.1.2@jenkins/l060"
   # Compo AngleSensor
-  - "cac_hwa/4.0.0@jenkins/l060" 
-  - "cas/7.0.1@jenkins/l060"
-  - "das/4.0.0@jenkins/l060"
+  - "cac_hwa/4.0.1@jenkins/l060" 
+  - "cas/7.0.2@jenkins/l060"
+  - "das/4.0.1@jenkins/l060"
   # Compo Angle
-  - "mtr/9.1.0@jenkins/l060"
+  - "mtr/9.1.1@jenkins/l060"
   - "sac/1.1.0@jenkins/l060"
-  - "mac/5.0.1@jenkins/l060"
+  - "mac/5.0.2@jenkins/l060"
   - "sam_hwa/5.0.1@jenkins/l060"
   - "vsd_hwa_l060/4.0.0@jenkins/l060"
   - "help/2.0.0@jenkins/l060"
