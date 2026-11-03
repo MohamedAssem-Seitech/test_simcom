@@ -10,7 +10,7 @@ Run from your repository root:
 python -m venv .venv
 source .venv/Scripts/activate
 python -m pip install -r requirements.txt
-python version_history.py --file-path config/tests.yml --old-version 2.1.2 --new-version 2.1.3
+python version_history.py --file-path test.yml --old-version 1.2.6 --new-version 1.2.7
 ```
 
 For this repository's `test.yml`:
@@ -36,10 +36,13 @@ Its `Version Changes` worksheet has one row per dependency with these columns:
 | Compo Alignment | asm | 4.1.1 | 4.1.0 | changed | quality change or correction without functional or architectural impact |
 
 The row above is an illustrative example, not a claim about local history.
-`SP01b03` displays component versions from `--new-version`; `SP01b02` displays
-them from `--old-version`. These are display labels, not Git tags or version
-selectors. Change `NEW_RELEASE_LABEL` and `OLD_RELEASE_LABEL` in the script
-if release names change; the command still accepts exactly three inputs.
+The third column displays component versions from `--new-version`; the fourth
+displays them from `--old-version`. Their names are generated automatically
+as `SP{minor:02d}b{patch:02d}`: `1.2.3` becomes `SP02b03`, and `5.15.3`
+becomes `SP15b03`. The major number and prerelease/build suffix are ignored
+for labels only. Numbers use at least two digits without truncation.
+If the two labels coincide, both columns are retained; header comments
+identify the full old/new versions. The command still accepts three inputs.
 
 Full-line comments inside `requires` identify subsystems, for example
 `# MBD Libraries`, `# Compo Alignment`, and `#Compo AngleSensor`. Entries without

@@ -9,12 +9,31 @@ from openpyxl import load_workbook
 
 from version_history import (
     COLUMNS, compare_components, find_changes, parse_components, version_at,
-    write_report, modification_type,
+    write_report, modification_type, release_label, report_headers,
 )
 
 
 class HistoryTests(unittest.TestCase):
     """Exercise real Git snapshots and the generated Excel report."""
+
+    def test_release_headers(self) -> None:
+        """Derive labels from minor/patch without losing colliding columns."""
+        for version, expected in (
+            ("1.2.3", "SP02b03"), ("5.15.3", "SP15b03"),
+            ("1.0.0", "SP00b00"), ("1.123.456", "SP123b456"),
+            ("1.2.3-rc.1", "SP02b03"),
+        ):
+            self.assertEqual(release_label(version), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "empty.xlsx"
+            write_report([], output, "1.2.3", "5.2.3")
+            workbook = load_workbook(output)
+            sheet = workbook["Version Changes"]
+            self.assertEqual(sheet.cell(1, 3).value, "SP02b03")
+            self.assertEqual(sheet.cell(1, 4).value, "SP02b03")
+            self.assertIn("5.2.3", sheet.cell(1, 3).comment.text)
+            self.assertIn("1.2.3", sheet.cell(1, 4).comment.text)
+            workbook.close()
 
     def test_modification_types(self) -> None:
         """Classify version fields by precedence without inventing impact."""
@@ -63,14 +82,14 @@ requires:
 '''
         rows = {r["Composant SW"]: r for r in compare_components(old, new)}
         self.assertEqual(rows["asm"]["Subsystem"], "Compo Alignment")
-        self.assertEqual(rows["asm"]["SP01b03"], "4.1.1")
-        self.assertEqual(rows["asm"]["SP01b02"], "4.1.0")
+        self.assertEqual(rows["asm"]["New Component Version"], "4.1.1")
+        self.assertEqual(rows["asm"]["Old Component Version"], "4.1.0")
         self.assertEqual(rows["asm"]["evolution"], "changed")
         self.assertEqual(rows["alt"]["evolution"], "same")
         self.assertEqual(rows["cac_hwa"]["evolution"], "new")
-        self.assertEqual(rows["cac_hwa"]["SP01b02"], "")
+        self.assertEqual(rows["cac_hwa"]["Old Component Version"], "")
         self.assertEqual(rows["das"]["evolution"], "deleted")
-        self.assertEqual(rows["das"]["SP01b03"], "")
+        self.assertEqual(rows["das"]["New Component Version"], "")
         self.assertEqual(rows["das"]["Subsystem"], "Compo AngleSensor")
         self.assertEqual(rows["cas"]["evolution"], "changed")
         self.assertEqual(parse_components("requires: []"), {})
@@ -155,11 +174,14 @@ requires:
                 )
                 self.assertTrue(all(r["Files Changed"] == "tests.yml" for r in rows))
                 output = root / "report.xlsx"
-                write_report(rows, output)
+                write_report(rows, output, "2.1.2", "2.1.3")
                 workbook = load_workbook(output)
                 sheet = workbook["Version Changes"]
                 self.assertEqual(sheet.max_row, 3)
-                self.assertEqual([c.value for c in sheet[1]], COLUMNS)
+                self.assertEqual(
+                    [c.value for c in sheet[1]],
+                    report_headers("2.1.2", "2.1.3"),
+                )
                 self.assertEqual(sheet.max_column, 6)
                 self.assertIn(
                     "design change : functional",
@@ -178,11 +200,14 @@ requires:
                 workbook.close()
 
                 empty = find_changes(repo, "tests.yml", "9.0.0", "9.0.1")
-                write_report(empty, output)
+                write_report(empty, output, "9.0.0", "9.0.1")
                 workbook = load_workbook(output)
                 sheet = workbook["Version Changes"]
                 self.assertEqual(sheet.max_row, 1)
-                self.assertEqual([cell.value for cell in sheet[1]], COLUMNS)
+                self.assertEqual(
+                    [cell.value for cell in sheet[1]],
+                    report_headers("9.0.0", "9.0.1"),
+                )
                 workbook.close()
 
                 for content in ("other: value", "version: [", "version: banana"):

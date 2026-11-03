@@ -32,8 +32,8 @@ VERSION_PATTERN = re.compile(
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?",
     flags=re.ASCII,
 )
-NEW_RELEASE_LABEL = "SP01b03"
-OLD_RELEASE_LABEL = "SP01b02"
+NEW_RELEASE_LABEL = "New Component Version"
+OLD_RELEASE_LABEL = "Old Component Version"
 COLUMNS = [
     "Subsystem", "Composant SW", NEW_RELEASE_LABEL, OLD_RELEASE_LABEL,
     "evolution", "Type de modification",
@@ -337,7 +337,26 @@ def find_changes(
     return matches
 
 
-def write_report(rows: list[dict[str, Any]], output: Path) -> None:
+def release_label(version: str) -> str:
+    """Format a release's minor and patch fields as SPNNbNN."""
+    valid_version(version)
+    match = VERSION_PATTERN.fullmatch(version)
+    assert match is not None
+    return f"SP{int(match.group(2)):02d}b{int(match.group(3)):02d}"
+
+
+def report_headers(old_version: str, new_version: str) -> list[str]:
+    """Return display headers, retaining distinct internal keys for columns."""
+    return [
+        "Subsystem", "Composant SW", release_label(new_version),
+        release_label(old_version), "evolution", "Type de modification",
+    ]
+
+
+def write_report(
+    rows: list[dict[str, Any]], output: Path,
+    old_version: str, new_version: str,
+) -> None:
     """Write component columns, with source metadata in cell comments."""
     cleaned = []
     comments = []
@@ -364,6 +383,7 @@ def write_report(rows: list[dict[str, Any]], output: Path) -> None:
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(cleaned, columns=COLUMNS).to_excel(
             writer, sheet_name="Version Changes", index=False,
+            header=report_headers(old_version, new_version),
         )
         sheet = writer.sheets["Version Changes"]
         # Commit messages and filenames are untrusted text, never formulas.
@@ -383,11 +403,11 @@ def write_report(rows: list[dict[str, Any]], output: Path) -> None:
             status = sheet.cell(index, 5)
             status.fill = PatternFill("solid", fgColor=colors[status.value])
         sheet.cell(1, 3).comment = Comment(
-            "Component version in the snapshot selected by --new-version.",
+            f"Component version in --new-version {new_version}.",
             "Version history",
         )
         sheet.cell(1, 4).comment = Comment(
-            "Component version in the snapshot selected by --old-version.",
+            f"Component version in --old-version {old_version}.",
             "Version history",
         )
         sheet.freeze_panes = "A2"
@@ -408,7 +428,7 @@ def main() -> int:
             rows = find_changes(
                 repo, relative_path, args.old_version, args.new_version,
             )
-        write_report(rows, output)
+        write_report(rows, output, args.old_version, args.new_version)
     except (GitError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
