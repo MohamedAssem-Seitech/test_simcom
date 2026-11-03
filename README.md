@@ -2,6 +2,36 @@
 
 Requires Python 3.10+ and Git installed and available on PATH.
 
+## Desktop GUI
+
+After installing requirements using the setup below, double-click
+`launch_gui.cmd` on Windows, or run from Git Bash:
+
+```bash
+source .venv/Scripts/activate
+python version_history_gui.py
+```
+
+Fill in the four fields:
+
+1. **Input path (YAML):** browse to the YAML file inside your local Git repository.
+2. **Output path (Excel):** choose the full destination filename ending in `.xlsx`.
+3. **Old commit ID:** the old snapshot's short or full commit hash.
+4. **New commit ID:** the new snapshot's short or full commit hash.
+
+Click **Generate Excel report**. The commits may be on different branches.
+The GUI displays completion or errors and asks before replacing an existing
+report. Close the report in Excel before overwriting it. The output folder
+must already exist. You can type the path of a historically committed YAML
+file even if it is no longer present in the working tree.
+
+Keep `version_history_gui.py` and `version_history.py` together. The Windows
+launcher uses `.venv` beside the scripts, or the installed `py -3` interpreter.
+Tkinter is included with standard Windows Python installations; enable the
+Tcl/Tk component in the Python installer if it is missing. No extra pip
+packages beyond `requirements.txt` are needed. This is a Python application,
+not a standalone executable.
+
 ## Windows setup (Git Bash)
 
 Run from your repository root:
