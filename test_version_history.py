@@ -10,11 +10,60 @@ from openpyxl import load_workbook
 from version_history import (
     COLUMNS, compare_components, find_changes, parse_components, version_at,
     write_report, modification_type, release_label, report_headers,
+    compare_commits,
 )
 
 
 class HistoryTests(unittest.TestCase):
     """Exercise real Git snapshots and the generated Excel report."""
+
+    def test_commit_ids_across_branches(self) -> None:
+        """Compare divergent snapshots even when YAML versions are identical."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with Repo.init(root) as repo:
+                actor = Actor("Test", "test@example.com")
+
+                def snapshot(dependency: str):
+                    (root / "tests.yml").write_text(
+                        f"version: 5.15.3\nrequires:\n- asm/{dependency}\n",
+                        encoding="utf-8",
+                    )
+                    repo.index.add(["tests.yml"])
+                    return repo.index.commit(
+                        dependency, author=actor, committer=actor,
+                    )
+
+                base = snapshot("1.0.0")
+                old = snapshot("1.1.0")
+                repo.create_head("other", base).checkout()
+                new = snapshot("2.0.0")
+                rows = compare_commits(
+                    repo, "tests.yml", old.hexsha[:8], new.hexsha[:8],
+                )
+                self.assertEqual(rows[0]["Old Version Commit"], old.hexsha)
+                self.assertEqual(rows[0]["Commit Hash"], new.hexsha)
+                self.assertEqual(rows[0]["Old Version"], "5.15.3")
+                component = rows[0]["Components"][0]
+                self.assertEqual(component["Old Component Version"], "1.1.0")
+                self.assertEqual(component["New Component Version"], "2.0.0")
+                self.assertEqual(component["evolution"], "changed")
+                output = root / "report.xlsx"
+                write_report(rows, output, "5.15.3", "5.15.3")
+                workbook = load_workbook(output)
+                sheet = workbook["Version Changes"]
+                self.assertEqual(sheet.cell(1, 3).value, "SP15b03")
+                self.assertEqual(sheet.cell(1, 4).value, "SP15b03")
+                self.assertEqual(sheet.cell(2, 3).value, "2.0.0")
+                self.assertEqual(sheet.cell(2, 4).value, "1.1.0")
+                workbook.close()
+                self.assertEqual(repo.head.commit.hexsha, new.hexsha)
+                with self.assertRaisesRegex(ValueError, "Cannot resolve"):
+                    compare_commits(repo, "tests.yml", "0" * 40, new.hexsha)
+                with self.assertRaisesRegex(ValueError, "missing"):
+                    compare_commits(repo, "absent.yml", old.hexsha, new.hexsha)
+                with self.assertRaisesRegex(ValueError, "same commit"):
+                    compare_commits(repo, "tests.yml", old.hexsha[:8], old.hexsha)
 
     def test_release_headers(self) -> None:
         """Derive labels from minor/patch without losing colliding columns."""

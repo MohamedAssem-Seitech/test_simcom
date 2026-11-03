@@ -5,6 +5,8 @@ Relative file paths are resolved against the current working directory.
 All commits reachable from local refs (including remote-tracking refs) and
 HEAD are scanned. Compare commits introducing the new version with their
 nearest old-version ancestors, allowing intermediate versions.
+Alternatively, supply two commit IDs to compare their snapshots directly,
+including commits on different branches. No checkout or fetch is performed.
 """
 
 from __future__ import annotations
@@ -153,15 +155,28 @@ def valid_version(value: str) -> str:
     return value
 
 
+def valid_selector(value: str) -> str:
+    """Accept a semantic version or a short/full hexadecimal commit ID."""
+    if VERSION_PATTERN.fullmatch(value) or re.fullmatch(r"[0-9a-fA-F]{4,40}", value):
+        return value
+    raise argparse.ArgumentTypeError(
+        "Expected a version such as 2.1.3 or a commit ID such as c2f9afb2."
+    )
+
+
 def parse_arguments() -> argparse.Namespace:
     """Parse the three required user inputs."""
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--file-path", required=True, type=Path)
-    parser.add_argument("--old-version", required=True, type=valid_version)
-    parser.add_argument("--new-version", required=True, type=valid_version)
+    parser.add_argument("--old-version", required=True, type=valid_selector)
+    parser.add_argument("--new-version", required=True, type=valid_selector)
     args = parser.parse_args()
     if args.old_version == args.new_version:
         parser.error("--old-version and --new-version must differ.")
+    if bool(VERSION_PATTERN.fullmatch(args.old_version)) != bool(
+        VERSION_PATTERN.fullmatch(args.new_version)
+    ):
+        parser.error("Use two version numbers or two commit IDs, not a mixture.")
     return args
 
 
@@ -337,6 +352,56 @@ def find_changes(
     return matches
 
 
+def compare_commits(
+    repo: Repo, file_path: str, old_id: str, new_id: str,
+) -> list[dict[str, Any]]:
+    """Compare explicitly selected commits without any ancestry requirement."""
+    snapshots = []
+    for identifier in (old_id, new_id):
+        if not re.fullmatch(r"[0-9a-fA-F]{4,40}", identifier):
+            raise ValueError(f"Invalid commit ID: {identifier!r}")
+        try:
+            sha = repo.git.rev_parse("--verify", f"{identifier.lower()}^{{commit}}")
+        except GitError as exc:
+            raise ValueError(
+                f"Cannot resolve commit {identifier!r}. Use a unique commit ID "
+                "available in this local repository; fetch its branch if needed."
+            ) from exc
+        commit = repo.commit(sha)
+        present, version = version_at(commit, file_path)
+        if not present:
+            raise ValueError(f"{file_path!r} is missing at commit {identifier}.")
+        if version is None:
+            raise ValueError(
+                f"{file_path!r} at {identifier} must contain valid YAML with a "
+                "top-level SemVer version to generate the SP column header."
+            )
+        source = (commit.tree / file_path).data_stream.read().decode("utf-8-sig")
+        snapshots.append((commit, version, source))
+    (old, old_version, old_source), (new, new_version, new_source) = snapshots
+    if old.hexsha == new.hexsha:
+        raise ValueError("Both IDs resolve to the same commit; select two commits.")
+    components = compare_components(old_source, new_source)
+    for component in components:
+        component["_baseline"] = old.hexsha
+    paths = {
+        path for change in old.diff(new)
+        for path in (change.a_path, change.b_path) if path
+    }
+    return [{
+        "Commit Hash": new.hexsha,
+        "Author Name": new.author.name or "",
+        "Author Email": new.author.email or "",
+        "Commit Date": new.committed_datetime.isoformat(),
+        "Commit Message": new.message,
+        "Old Version": old_version,
+        "New Version": new_version,
+        "Files Changed": "\n".join(sorted(paths)),
+        "Old Version Commit": old.hexsha,
+        "Components": components,
+    }]
+
+
 def release_label(version: str) -> str:
     """Format a release's minor and patch fields as SPNNbNN."""
     valid_version(version)
@@ -421,21 +486,34 @@ def write_report(
 def main() -> int:
     """Run the scan and report actionable errors without a traceback."""
     args = parse_arguments()
+    commit_mode = VERSION_PATTERN.fullmatch(args.old_version) is None
     output = Path.cwd() / "version_changes_report.xlsx"
     try:
         repo, relative_path = locate_repository(args.file_path)
         with repo:
-            rows = find_changes(
-                repo, relative_path, args.old_version, args.new_version,
-            )
-        write_report(rows, output, args.old_version, args.new_version)
+            if commit_mode:
+                rows = compare_commits(
+                    repo, relative_path, args.old_version, args.new_version,
+                )
+                old_version = rows[0]["Old Version"]
+                new_version = rows[0]["New Version"]
+            else:
+                rows = find_changes(
+                    repo, relative_path, args.old_version, args.new_version,
+                )
+                old_version, new_version = args.old_version, args.new_version
+        write_report(rows, output, old_version, new_version)
     except (GitError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     if not rows:
         print(f"No commits found where version changed from "
               f"{args.old_version} to {args.new_version}.")
-    print(f"Matching commits: {len(rows)}")
+    if commit_mode:
+        print(f"Compared commits: {rows[0]['Old Version Commit']} -> "
+              f"{rows[0]['Commit Hash']}")
+    else:
+        print(f"Matching commits: {len(rows)}")
     print(f"Component rows: {sum(len(row['Components']) for row in rows)}")
     print(f"Excel report: {output}")
     return 0

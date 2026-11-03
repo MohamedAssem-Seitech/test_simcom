@@ -27,6 +27,23 @@ python version_history.py --file-path "C:/Projects/My Repo/config/tests.yml" --o
 
 Run `source .venv/Scripts/activate` again when opening a new Git Bash session.
 
+## Compare commit IDs, including different branches
+
+```bash
+python version_history.py --file-path test.yml --old-version c2f9afb2 --new-version a99e3fed
+```
+
+Both inputs may be unique abbreviated commit IDs (at least four hexadecimal
+characters) or full commit hashes. This compares the two selected snapshots
+directly, with no ancestry requirement and no branch checkout. Their YAML
+versions can be identical. Both commits must be available locally; run
+`git fetch --all` if the remote branches have not yet been fetched.
+The specified YAML path must exist at both commits and contain a valid
+top-level SemVer `version`. Excel headers use those YAML versions, not the IDs.
+Row comments identify both commits; `Files Changed` is the diff between them.
+Missing or ambiguous IDs produce an error. Supply either two commit IDs or
+two version numbers; mixing the two is not supported.
+
 The command overwrites `version_changes_report.xlsx` in the current working
 directory. Close that file in Excel before running the command again.
 Its `Version Changes` worksheet has one row per dependency with these columns:
@@ -79,7 +96,7 @@ comments. New-snapshot order is preserved, with deleted entries appended.
 Excel cells exceeding its 32,767-character limit are
 truncated with a warning; unsupported control characters are removed.
 
-## Comparison rules
+## Version-number search rules
 
 - The YAML must have a top-level string `version`, such as `version: 2.1.2`.
   Versions follow SemVer: `MAJOR.MINOR.PATCH`, optionally with prerelease and
