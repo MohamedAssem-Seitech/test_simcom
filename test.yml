@@ -1,5 +1,5 @@
 name: pdc_info_fwa1
-version: 2.0.0
+version: 2.0.1
 requires:
 - GLOBAL_L060G5/5.2.1@jenkins/l060
 - SharedElements/2.2.2@jenkins/swp
