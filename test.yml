@@ -1,5 +1,5 @@
 name: "L060_HWA"
-version: "1.0.1"
+version: "1.0.2"
 requires:
     # MBD Libraries
   - "GLOBAL_STD/1.12.0@jenkins/swp"
