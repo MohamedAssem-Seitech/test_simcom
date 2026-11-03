@@ -1,0 +1,4 @@
+GitPython>=3.1.43,<4
+PyYAML>=6.0.2,<7
+pandas>=2.2.3,<3
+openpyxl>=3.1.5,<4
