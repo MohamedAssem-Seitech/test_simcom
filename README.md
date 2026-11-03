@@ -29,9 +29,38 @@ Run `source .venv/Scripts/activate` again when opening a new Git Bash session.
 
 The command overwrites `version_changes_report.xlsx` in the current working
 directory. Close that file in Excel before running the command again.
-Its `Version Changes` worksheet includes commit hash, author name and email,
-committer date (ISO 8601 with timezone), full commit message, old/new versions,
-and changed paths. Excel cells exceeding its 32,767-character limit are
+Its `Version Changes` worksheet has one row per dependency with these columns:
+
+| Subsystem | Composant SW | SP01b03 | SP01b02 | evolution |
+| --- | --- | --- | --- | --- |
+| Compo Alignment | asm | 4.1.1 | 4.1.0 | changed |
+
+The row above is an illustrative example, not a claim about local history.
+`SP01b03` displays component versions from `--new-version`; `SP01b02` displays
+them from `--old-version`. These are display labels, not Git tags or version
+selectors. Change `NEW_RELEASE_LABEL` and `OLD_RELEASE_LABEL` in the script
+if release names change; the command still accepts exactly three inputs.
+
+Full-line comments inside `requires` identify subsystems, for example
+`# MBD Libraries`, `# Compo Alignment`, and `#Compo AngleSensor`. Entries without
+a preceding section comment use `Ungrouped`. Inline comments are ignored.
+Component names are extracted before `/`, and component versions before `@`.
+Names must be unique within a snapshot; invalid references cause a clear error.
+An absent `requires` key is treated as an empty dependency list.
+
+Evolution is `new`, `deleted`, `changed`, or `same`. A full reference change
+(including user/channel) counts as `changed`, even with identical version
+numbers. Reordering entries or moving a component between subsystems alone
+does not count as a reference change. The new subsystem is displayed, except
+for deleted components, which retain their old subsystem. Missing versions
+are blank for added/deleted components.
+
+Hover over a Subsystem cell to see the compared commit hashes, author,
+date, message, changed files, and full old/new references. Multiple matching
+commit pairs produce separate groups of component rows, identified by these
+comments. New-snapshot order is preserved, with deleted entries appended.
+
+Excel cells exceeding its 32,767-character limit are
 truncated with a warning; unsupported control characters are removed.
 
 ## Comparison rules
@@ -46,11 +75,10 @@ truncated with a warning; unsupported control characters are removed.
   allowed, so `2.0.1 -> 2.1.1 -> 2.1.2 -> 2.1.3` matches a search for
   `2.0.1` to `2.1.3`. Commits inheriting the new version from any parent
   are skipped. Unrelated branches are never used as comparison baselines.
-- `Requires Changes` shows added/removed entries between the two endpoint
-  snapshots. `Old Version Commit` identifies the baseline. Equally near old
-  ancestors are all included and labeled in the same row for merge histories.
+- The component table compares the two endpoint snapshots. Equally near old
+  ancestors each produce a comparison, identified in the row comments.
 - Commit metadata describes the commit introducing the new version.
-  `Files Changed` still lists that commit's changes against its parents,
+  `Files Changed` in the cell comment lists that commit's changes against its parents,
   rather than all changes across the version range.
 - Root commits and file additions have no previous version and do not match.
 - The supplied path is fixed across history; renames are not followed.

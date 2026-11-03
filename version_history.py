@@ -21,7 +21,8 @@ import yaml
 from git import Commit, Repo
 from git.exc import GitError
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
-from openpyxl.styles import Alignment
+from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Font, PatternFill
 
 
 VERSION_PATTERN = re.compile(
@@ -31,12 +32,86 @@ VERSION_PATTERN = re.compile(
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?",
     flags=re.ASCII,
 )
+NEW_RELEASE_LABEL = "SP01b03"
+OLD_RELEASE_LABEL = "SP01b02"
 COLUMNS = [
-    "Commit Hash", "Author Name", "Author Email", "Commit Date",
-    "Commit Message", "Old Version", "New Version", "Files Changed",
-    "Requires Changes",
-    "Old Version Commit",
+    "Subsystem", "Composant SW", NEW_RELEASE_LABEL, OLD_RELEASE_LABEL,
+    "evolution",
 ]
+
+
+def parse_components(source: str) -> dict[str, dict[str, str]]:
+    """Read dependency references and preceding full-line section comments.
+
+    SafeLoader validates values; YAML node line numbers associate comments
+    with entries without mistaking inline comments for subsystem headings.
+    Component names must be unique within one snapshot.
+    """
+    document = yaml.safe_load(source)
+    if not isinstance(document, dict):
+        raise ValueError("Expected a YAML mapping")
+    if "requires" not in document:
+        return {}
+    if not isinstance(document["requires"], list):
+        raise ValueError("'requires' must be a list of dependency strings")
+    root = yaml.compose(source, Loader=yaml.SafeLoader)
+    assert isinstance(root, yaml.MappingNode)
+    key, sequence = next(
+        (key, value) for key, value in root.value if key.value == "requires"
+    )
+    if not isinstance(sequence, yaml.SequenceNode):
+        raise ValueError("'requires' must be a YAML sequence")
+    lines = source.splitlines()
+    cursor = key.end_mark.line + 1
+    subsystem = "Ungrouped"
+    components = {}
+    for node, reference in zip(sequence.value, document["requires"]):
+        for line in lines[cursor:node.start_mark.line]:
+            stripped = line.strip()
+            if stripped.startswith("#") and stripped[1:].strip():
+                subsystem = stripped[1:].strip()
+        cursor = node.end_mark.line + 1
+        if not isinstance(reference, str):
+            raise ValueError("Each requires entry must be a string")
+        match = re.fullmatch(r"([^/\s]+)/([^@\s]+)(?:@([^\s]+))?", reference)
+        if not match:
+            raise ValueError(f"Invalid dependency reference: {reference!r}")
+        name, version, _ = match.groups()
+        if name in components:
+            raise ValueError(f"Duplicate component name in requires: {name}")
+        components[name] = {
+            "subsystem": subsystem, "version": version, "reference": reference,
+        }
+    return components
+
+
+def compare_components(old_source: str, new_source: str) -> list[dict[str, str]]:
+    """Build one row per dependency, keeping new order then deleted entries."""
+    old = parse_components(old_source)
+    new = parse_components(new_source)
+    rows = []
+    for name in dict.fromkeys([*new, *old]):
+        before, after = old.get(name), new.get(name)
+        if before is None:
+            evolution = "new"
+        elif after is None:
+            evolution = "deleted"
+        elif before["reference"] != after["reference"]:
+            evolution = "changed"
+        else:
+            evolution = "same"
+        component = after if after is not None else before
+        assert component is not None
+        rows.append({
+            "Subsystem": component["subsystem"],
+            "Composant SW": name,
+            NEW_RELEASE_LABEL: after["version"] if after else "",
+            OLD_RELEASE_LABEL: before["version"] if before else "",
+            "evolution": evolution,
+            "_old_reference": before["reference"] if before else "",
+            "_new_reference": after["reference"] if after else "",
+        })
+    return rows
 
 
 def valid_version(value: str) -> str:
@@ -202,11 +277,21 @@ def find_changes(
         if not baselines:
             continue
         requires_diffs = []
+        component_rows = []
         for baseline in baselines:
             difference = requires_changes(baseline, commit, file_path)
             if len(baselines) > 1:
                 difference = f"Old commit {baseline.hexsha}:\n{difference}"
             requires_diffs.append(difference)
+            old_source = (baseline.tree / file_path).data_stream.read().decode(
+                "utf-8-sig",
+            )
+            new_source = (commit.tree / file_path).data_stream.read().decode(
+                "utf-8-sig",
+            )
+            for component_row in compare_components(old_source, new_source):
+                component_row["_baseline"] = baseline.hexsha
+                component_rows.append(component_row)
         matches.append({
             "Commit Hash": commit.hexsha,
             "Author Name": commit.author.name or "",
@@ -218,23 +303,35 @@ def find_changes(
             "Files Changed": changed_files(commit),
             "Requires Changes": "\n\n".join(requires_diffs),
             "Old Version Commit": "\n".join(c.hexsha for c in baselines),
+            "Components": component_rows,
         })
     return matches
 
 
 def write_report(rows: list[dict[str, Any]], output: Path) -> None:
-    """Write text cells safely, retaining headers even for an empty report."""
+    """Write five component columns, with source metadata in cell comments."""
     cleaned = []
-    for row in rows:
-        cleaned_row = {}
-        for key, value in row.items():
-            text = ILLEGAL_CHARACTERS_RE.sub("", str(value))
-            if len(text) > 32767:
-                print(f"Warning: truncating {key} to Excel's cell limit.",
-                      file=sys.stderr)
-                text = text[:32750] + "\n[truncated]"
-            cleaned_row[key] = text
-        cleaned.append(cleaned_row)
+    comments = []
+    for match in rows:
+        for row in match["Components"]:
+            cleaned_row = {}
+            for key in COLUMNS:
+                text = ILLEGAL_CHARACTERS_RE.sub("", str(row[key]))
+                if len(text) > 32767:
+                    print(f"Warning: truncating {key} to Excel's cell limit.",
+                          file=sys.stderr)
+                    text = text[:32750] + "\n[truncated]"
+                cleaned_row[key] = text
+            cleaned.append(cleaned_row)
+            metadata = "\n".join(
+                f"{key}: {value}" for key, value in match.items()
+                if key not in {"Components", "Requires Changes"}
+            )
+            comments.append(ILLEGAL_CHARACTERS_RE.sub(
+                "", f"{metadata}\nCompared old commit: {row['_baseline']}\n"
+                f"Old reference: {row['_old_reference']}\n"
+                f"New reference: {row['_new_reference']}",
+            ))
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         pd.DataFrame(cleaned, columns=COLUMNS).to_excel(
             writer, sheet_name="Version Changes", index=False,
@@ -244,12 +341,30 @@ def write_report(rows: list[dict[str, Any]], output: Path) -> None:
         for row in sheet.iter_rows():
             for cell in row:
                 cell.data_type = "s"
-                if cell.column == 9:
-                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+        for cell in sheet[1]:
+            cell.fill = PatternFill("solid", fgColor="17365D")
+            cell.font = Font(color="FFFFFF", bold=True)
+        colors = {
+            "changed": "FFF2CC", "new": "E2F0D9",
+            "deleted": "FCE4D6", "same": "E7E6E6",
+        }
+        for index, comment in enumerate(comments, start=2):
+            sheet.cell(index, 1).comment = Comment(comment, "Version history")
+            status = sheet.cell(index, 5)
+            status.fill = PatternFill("solid", fgColor=colors[status.value])
+        sheet.cell(1, 3).comment = Comment(
+            "Component version in the snapshot selected by --new-version.",
+            "Version history",
+        )
+        sheet.cell(1, 4).comment = Comment(
+            "Component version in the snapshot selected by --old-version.",
+            "Version history",
+        )
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
         for column, width in zip(
-            "ABCDEFGHIJ", (44, 24, 32, 28, 70, 20, 20, 60, 90, 44),
+            "ABCDE", (34, 34, 24, 24, 18),
         ):
             sheet.column_dimensions[column].width = width
 
@@ -272,6 +387,7 @@ def main() -> int:
         print(f"No commits found where version changed from "
               f"{args.old_version} to {args.new_version}.")
     print(f"Matching commits: {len(rows)}")
+    print(f"Component rows: {sum(len(row['Components']) for row in rows)}")
     print(f"Excel report: {output}")
     return 0
 

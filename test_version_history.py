@@ -7,11 +7,54 @@ from pathlib import Path
 from git import Actor, Repo
 from openpyxl import load_workbook
 
-from version_history import COLUMNS, find_changes, version_at, write_report
+from version_history import (
+    COLUMNS, compare_components, find_changes, parse_components, version_at,
+    write_report,
+)
 
 
 class HistoryTests(unittest.TestCase):
     """Exercise real Git snapshots and the generated Excel report."""
+
+    def test_component_comparison(self) -> None:
+        """Preserve comment groups and distinguish all four evolution states."""
+        old = '''name: L060_HWA
+version: 2.1.2
+requires:
+  # Compo Alignment
+  - "asm/4.1.0@jenkins/l060"
+  - "alt/1.1.0@jenkins/l060"
+  #Compo AngleSensor
+  - "das/4.0.0@jenkins/l060"
+  - "cas/7.0.1@jenkins/old"
+'''
+        new = '''name: L060_HWA
+version: 2.1.3
+requires:
+  # Compo Alignment
+  - "asm/4.1.1@jenkins/l060"  # ordinary inline comment
+  - "alt/1.1.0@jenkins/l060"
+  #Compo AngleSensor
+  - "cac_hwa/4.0.0@jenkins/l060"
+  - "cas/7.0.1@jenkins/new"
+'''
+        rows = {r["Composant SW"]: r for r in compare_components(old, new)}
+        self.assertEqual(rows["asm"]["Subsystem"], "Compo Alignment")
+        self.assertEqual(rows["asm"]["SP01b03"], "4.1.1")
+        self.assertEqual(rows["asm"]["SP01b02"], "4.1.0")
+        self.assertEqual(rows["asm"]["evolution"], "changed")
+        self.assertEqual(rows["alt"]["evolution"], "same")
+        self.assertEqual(rows["cac_hwa"]["evolution"], "new")
+        self.assertEqual(rows["cac_hwa"]["SP01b02"], "")
+        self.assertEqual(rows["das"]["evolution"], "deleted")
+        self.assertEqual(rows["das"]["SP01b03"], "")
+        self.assertEqual(rows["das"]["Subsystem"], "Compo AngleSensor")
+        self.assertEqual(rows["cas"]["evolution"], "changed")
+        self.assertEqual(parse_components("requires: []"), {})
+        with self.assertRaises(ValueError):
+            parse_components("requires: [asm/1.0.0, asm/2.0.0]")
+        with self.assertRaises(ValueError):
+            parse_components("requires: [invalid]")
 
     def test_intermediate_versions(self) -> None:
         """Compare endpoints across intermediate versions on actual ancestry."""
@@ -93,12 +136,18 @@ class HistoryTests(unittest.TestCase):
                 workbook = load_workbook(output)
                 sheet = workbook["Version Changes"]
                 self.assertEqual(sheet.max_row, 3)
-                self.assertEqual(sheet.cell(1, 9).value, "Requires Changes")
-                self.assertIn(
-                    first_row["Requires Changes"],
-                    [sheet.cell(i, 9).value for i in (2, 3)],
+                self.assertEqual([c.value for c in sheet[1]], COLUMNS)
+                self.assertEqual(sheet.max_column, 5)
+                self.assertEqual(
+                    {sheet.cell(i, 5).value for i in (2, 3)},
+                    {"changed", "deleted"},
                 )
-                self.assertTrue(all(sheet.cell(i, 5).data_type == "s" for i in (2, 3)))
+                for i in (2, 3):
+                    self.assertEqual(sheet.cell(i, 2).value, "Library")
+                    self.assertEqual(sheet.cell(i, 2).data_type, "s")
+                    self.assertIn(
+                        "Commit Hash:", sheet.cell(i, 1).comment.text,
+                    )
                 workbook.close()
 
                 empty = find_changes(repo, "tests.yml", "9.0.0", "9.0.1")
