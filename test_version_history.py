@@ -27,8 +27,14 @@ class HistoryTests(unittest.TestCase):
                         message, author=actor, committer=actor,
                     )
 
-                initial = commit("version: 2.1.2\n", "Initial")
-                first = commit("version: 2.1.3\n", "=Untrusted message")
+                initial = commit(
+                    "version: 2.1.2\nrequires:\n- Library/1.0.0\n",
+                    "Initial",
+                )
+                first = commit(
+                    "version: 2.1.3\nrequires:\n- Library/1.1.0\n",
+                    "=Untrusted message",
+                )
                 commit("version: 2.1.3\n# unchanged\n", "No change")
                 repo.create_head("other", initial).checkout()
                 second = commit("version: 2.1.3\n", "Other branch")
@@ -37,12 +43,24 @@ class HistoryTests(unittest.TestCase):
                     {row["Commit Hash"] for row in rows},
                     {first.hexsha, second.hexsha},
                 )
+                first_row = next(
+                    r for r in rows if r["Commit Hash"] == first.hexsha
+                )
+                self.assertEqual(
+                    first_row["Requires Changes"],
+                    "Removed: Library/1.0.0\nAdded: Library/1.1.0",
+                )
                 self.assertTrue(all(r["Files Changed"] == "tests.yml" for r in rows))
                 output = root / "report.xlsx"
                 write_report(rows, output)
                 workbook = load_workbook(output)
                 sheet = workbook["Version Changes"]
                 self.assertEqual(sheet.max_row, 3)
+                self.assertEqual(sheet.cell(1, 9).value, "Requires Changes")
+                self.assertIn(
+                    first_row["Requires Changes"],
+                    [sheet.cell(i, 9).value for i in (2, 3)],
+                )
                 self.assertTrue(all(sheet.cell(i, 5).data_type == "s" for i in (2, 3)))
                 workbook.close()
 

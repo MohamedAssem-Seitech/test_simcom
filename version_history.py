@@ -10,6 +10,7 @@ each matching commit is reported once. Root commits have no previous version.
 from __future__ import annotations
 
 import argparse
+import difflib
 import re
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ import yaml
 from git import Commit, Repo
 from git.exc import GitError
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.styles import Alignment
 
 
 VERSION_PATTERN = re.compile(
@@ -32,6 +34,7 @@ VERSION_PATTERN = re.compile(
 COLUMNS = [
     "Commit Hash", "Author Name", "Author Email", "Commit Date",
     "Commit Message", "Old Version", "New Version", "Files Changed",
+    "Requires Changes",
 ]
 
 
@@ -116,6 +119,29 @@ def changed_files(commit: Commit) -> str:
     return "\n".join(sorted(paths))
 
 
+def requires_changes(parent: Commit, commit: Commit, file_path: str) -> str:
+    """Describe removed/added requires entries from validated YAML snapshots."""
+    def lines_at(revision: Commit) -> list[str]:
+        blob = revision.tree / file_path
+        document = yaml.safe_load(blob.data_stream.read().decode("utf-8-sig"))
+        if "requires" not in document:
+            return ["[requires key absent]"]
+        requires = document["requires"]
+        if isinstance(requires, list) and all(
+            isinstance(item, str) for item in requires
+        ):
+            return requires
+        return yaml.safe_dump(requires, sort_keys=True).splitlines()
+
+    changes = []
+    for line in difflib.ndiff(lines_at(parent), lines_at(commit)):
+        if line.startswith("- "):
+            changes.append(f"Removed: {line[2:]}")
+        elif line.startswith("+ "):
+            changes.append(f"Added: {line[2:]}")
+    return "\n".join(changes) or "No changes"
+
+
 def find_changes(
     repo: Repo, file_path: str, old_version: str, new_version: str,
 ) -> list[dict[str, Any]]:
@@ -142,8 +168,17 @@ def find_changes(
     for commit in commits:
         if versions[commit.hexsha] != new_version:
             continue
-        if not any(versions.get(p.hexsha) == old_version for p in commit.parents):
+        matching_parents = [
+            p for p in commit.parents if versions.get(p.hexsha) == old_version
+        ]
+        if not matching_parents:
             continue
+        requires_diffs = []
+        for parent in matching_parents:
+            difference = requires_changes(parent, commit, file_path)
+            if len(matching_parents) > 1:
+                difference = f"Parent {parent.hexsha}:\n{difference}"
+            requires_diffs.append(difference)
         matches.append({
             "Commit Hash": commit.hexsha,
             "Author Name": commit.author.name or "",
@@ -153,6 +188,7 @@ def find_changes(
             "Old Version": old_version,
             "New Version": new_version,
             "Files Changed": changed_files(commit),
+            "Requires Changes": "\n\n".join(requires_diffs),
         })
     return matches
 
@@ -179,9 +215,13 @@ def write_report(rows: list[dict[str, Any]], output: Path) -> None:
         for row in sheet.iter_rows():
             for cell in row:
                 cell.data_type = "s"
+                if cell.column == 9:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
-        for column, width in zip("ABCDEFGH", (44, 24, 32, 28, 70, 20, 20, 60)):
+        for column, width in zip(
+            "ABCDEFGHI", (44, 24, 32, 28, 70, 20, 20, 60, 90),
+        ):
             sheet.column_dimensions[column].width = width
 
 
