@@ -31,9 +31,9 @@ The command overwrites `version_changes_report.xlsx` in the current working
 directory. Close that file in Excel before running the command again.
 Its `Version Changes` worksheet has one row per dependency with these columns:
 
-| Subsystem | Composant SW | SP01b03 | SP01b02 | evolution |
-| --- | --- | --- | --- | --- |
-| Compo Alignment | asm | 4.1.1 | 4.1.0 | changed |
+| Subsystem | Composant SW | SP01b03 | SP01b02 | evolution | Type de modification |
+| --- | --- | --- | --- | --- | --- |
+| Compo Alignment | asm | 4.1.1 | 4.1.0 | changed | quality change or correction without functional or architectural impact |
 
 The row above is an illustrative example, not a claim about local history.
 `SP01b03` displays component versions from `--new-version`; `SP01b02` displays
@@ -54,6 +54,19 @@ numbers. Reordering entries or moving a component between subsystems alone
 does not count as a reference change. The new subsystem is displayed, except
 for deleted components, which retain their old subsystem. Missing versions
 are blank for added/deleted components.
+
+`Type de modification` follows the highest changed version field:
+
+- Major: `design change : architecture`.
+- Minor: `design change : functional`.
+- Patch: `quality change or correction without functional or architectural impact`.
+- Unchanged, added, or removed: `same`, `new`, or `deleted` respectively.
+
+These labels are inferred from version numbers, including downgrades; they
+are not a code-level impact analysis. User/channel-only changes are labeled
+`reference change (user/channel)`. Suffix-only changes are labeled
+`prerelease/build metadata change`. Non-SemVer versions are marked
+`unclassified (non-SemVer version)` when changed.
 
 Hover over a Subsystem cell to see the compared commit hashes, author,
 date, message, changed files, and full old/new references. Multiple matching

@@ -36,7 +36,7 @@ NEW_RELEASE_LABEL = "SP01b03"
 OLD_RELEASE_LABEL = "SP01b02"
 COLUMNS = [
     "Subsystem", "Composant SW", NEW_RELEASE_LABEL, OLD_RELEASE_LABEL,
-    "evolution",
+    "evolution", "Type de modification",
 ]
 
 
@@ -85,6 +85,31 @@ def parse_components(source: str) -> dict[str, dict[str, str]]:
     return components
 
 
+def modification_type(old_version: str, new_version: str, evolution: str) -> str:
+    """Classify the highest changed version field, including downgrades.
+
+    Reference-only and suffix-only changes have their own labels because
+    their architectural or functional impact cannot be inferred.
+    """
+    if evolution != "changed":
+        return evolution
+    if old_version == new_version:
+        return "reference change (user/channel)"
+    old_match = VERSION_PATTERN.fullmatch(old_version)
+    new_match = VERSION_PATTERN.fullmatch(new_version)
+    if old_match is None or new_match is None:
+        return "unclassified (non-SemVer version)"
+    labels = (
+        "design change : architecture",
+        "design change : functional",
+        "quality change or correction without functional or architectural impact",
+    )
+    for index, label in enumerate(labels, start=1):
+        if old_match.group(index) != new_match.group(index):
+            return label
+    return "prerelease/build metadata change"
+
+
 def compare_components(old_source: str, new_source: str) -> list[dict[str, str]]:
     """Build one row per dependency, keeping new order then deleted entries."""
     old = parse_components(old_source)
@@ -108,6 +133,10 @@ def compare_components(old_source: str, new_source: str) -> list[dict[str, str]]
             NEW_RELEASE_LABEL: after["version"] if after else "",
             OLD_RELEASE_LABEL: before["version"] if before else "",
             "evolution": evolution,
+            "Type de modification": modification_type(
+                before["version"] if before else "",
+                after["version"] if after else "", evolution,
+            ),
             "_old_reference": before["reference"] if before else "",
             "_new_reference": after["reference"] if after else "",
         })
@@ -309,7 +338,7 @@ def find_changes(
 
 
 def write_report(rows: list[dict[str, Any]], output: Path) -> None:
-    """Write five component columns, with source metadata in cell comments."""
+    """Write component columns, with source metadata in cell comments."""
     cleaned = []
     comments = []
     for match in rows:
@@ -364,7 +393,7 @@ def write_report(rows: list[dict[str, Any]], output: Path) -> None:
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
         for column, width in zip(
-            "ABCDE", (34, 34, 24, 24, 18),
+            "ABCDEF", (34, 34, 24, 24, 18, 75),
         ):
             sheet.column_dimensions[column].width = width
 

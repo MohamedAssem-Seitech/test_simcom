@@ -9,12 +9,35 @@ from openpyxl import load_workbook
 
 from version_history import (
     COLUMNS, compare_components, find_changes, parse_components, version_at,
-    write_report,
+    write_report, modification_type,
 )
 
 
 class HistoryTests(unittest.TestCase):
     """Exercise real Git snapshots and the generated Excel report."""
+
+    def test_modification_types(self) -> None:
+        """Classify version fields by precedence without inventing impact."""
+        cases = [
+            ("7.1.0", "8.1.0", "changed", "design change : architecture"),
+            ("2.0.0", "2.1.0", "changed", "design change : functional"),
+            ("1.0.0", "1.0.1", "changed",
+             "quality change or correction without functional or architectural impact"),
+            ("1.0.0", "1.0.0", "same", "same"),
+            ("", "1.0.0", "new", "new"),
+            ("1.0.0", "", "deleted", "deleted"),
+            ("1.0.0", "2.1.1", "changed", "design change : architecture"),
+            ("2.1.1", "2.0.0", "changed", "design change : functional"),
+            ("1.0.0", "1.0.0", "changed", "reference change (user/channel)"),
+            ("1.0.0-rc.1", "1.0.0", "changed",
+             "prerelease/build metadata change"),
+            ("1", "2", "changed", "unclassified (non-SemVer version)"),
+        ]
+        for old, new, evolution, expected in cases:
+            with self.subTest(old=old, new=new, evolution=evolution):
+                self.assertEqual(
+                    modification_type(old, new, evolution), expected,
+                )
 
     def test_component_comparison(self) -> None:
         """Preserve comment groups and distinguish all four evolution states."""
@@ -137,7 +160,11 @@ requires:
                 sheet = workbook["Version Changes"]
                 self.assertEqual(sheet.max_row, 3)
                 self.assertEqual([c.value for c in sheet[1]], COLUMNS)
-                self.assertEqual(sheet.max_column, 5)
+                self.assertEqual(sheet.max_column, 6)
+                self.assertIn(
+                    "design change : functional",
+                    [sheet.cell(i, 6).value for i in (2, 3)],
+                )
                 self.assertEqual(
                     {sheet.cell(i, 5).value for i in (2, 3)},
                     {"changed", "deleted"},
